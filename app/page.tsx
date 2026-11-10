@@ -1,17 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  dailyTheme,
   durations,
+  generateDaily,
+  generateSession,
   meditations,
+  promptCount,
+  PROMPT_INTERVAL_MS,
   type DurationMinutes,
   type Meditation,
 } from "./meditations";
 
 type View =
   | { kind: "home" }
-  | { kind: "playing"; meditation: Meditation; minutes: DurationMinutes }
-  | { kind: "done"; meditation: Meditation };
+  | { kind: "playing"; prompts: string[]; title: string }
+  | { kind: "done"; title: string };
 
 export default function Page() {
   const [view, setView] = useState<View>({ kind: "home" });
@@ -19,8 +24,21 @@ export default function Page() {
   if (view.kind === "home") {
     return (
       <Home
-        onStart={(meditation, minutes) =>
-          setView({ kind: "playing", meditation, minutes })
+        onStartPractice={(meditation, minutes) =>
+          setView({
+            kind: "playing",
+            // A fresh, unique sequence is generated for every sit.
+            prompts: generateSession(meditation, promptCount(minutes)),
+            title: meditation.name.toLowerCase(),
+          })
+        }
+        onStartDaily={(minutes) =>
+          setView({
+            kind: "playing",
+            // Today's sit — the same all day, fresh each morning.
+            prompts: generateDaily(new Date(), promptCount(minutes)),
+            title: "today's sit",
+          })
         }
       />
     );
@@ -29,31 +47,36 @@ export default function Page() {
   if (view.kind === "playing") {
     return (
       <Player
-        meditation={view.meditation}
-        minutes={view.minutes}
+        prompts={view.prompts}
         onExit={() => setView({ kind: "home" })}
-        onFinish={() => setView({ kind: "done", meditation: view.meditation })}
+        onFinish={() => setView({ kind: "done", title: view.title })}
       />
     );
   }
 
-  return (
-    <Done
-      meditation={view.meditation}
-      onHome={() => setView({ kind: "home" })}
-    />
-  );
+  return <Done title={view.title} onHome={() => setView({ kind: "home" })} />;
 }
 
 function Home({
-  onStart,
+  onStartPractice,
+  onStartDaily,
 }: {
-  onStart: (m: Meditation, minutes: DurationMinutes) => void;
+  onStartPractice: (m: Meditation, minutes: DurationMinutes) => void;
+  onStartDaily: (minutes: DurationMinutes) => void;
 }) {
   const [selected, setSelected] = useState<Meditation["id"]>("breath");
   const [minutes, setMinutes] = useState<DurationMinutes>(5);
 
+  // Today's theme depends on the local date, so resolve it after mount to
+  // avoid a server/client hydration mismatch.
+  const [today, setToday] = useState<Date | null>(null);
+  useEffect(() => setToday(new Date()), []);
+
   const meditation = meditations.find((m) => m.id === selected)!;
+  const minutesLabel = durations.find((d) => d.minutes === minutes)!.label;
+  const dateLabel = today
+    ? today.toLocaleDateString(undefined, { month: "long", day: "numeric" })
+    : "";
 
   return (
     <main className="home">
@@ -61,6 +84,21 @@ function Home({
 
       <div className="home-body">
         <h1 className="lede">A reading meditation. Sit, and read along.</h1>
+
+        <button
+          className="daily"
+          onClick={() => onStartDaily(minutes)}
+          aria-label={`Begin today's meditation, ${minutesLabel}`}
+        >
+          <span className="daily-head">
+            <span className="daily-kicker">Daily</span>
+            <span className="daily-date">{dateLabel}</span>
+          </span>
+          <span className="daily-theme">
+            {today ? dailyTheme(today) : "Today's meditation"}
+          </span>
+          <span className="daily-go">Begin today's sit · {minutesLabel}</span>
+        </button>
 
         <section>
           <p className="section-label">Practice</p>
@@ -96,7 +134,10 @@ function Home({
           </div>
         </section>
 
-        <button className="begin" onClick={() => onStart(meditation, minutes)}>
+        <button
+          className="begin"
+          onClick={() => onStartPractice(meditation, minutes)}
+        >
           Begin
         </button>
       </div>
@@ -107,21 +148,15 @@ function Home({
 }
 
 function Player({
-  meditation,
-  minutes,
+  prompts,
   onExit,
   onFinish,
 }: {
-  meditation: Meditation;
-  minutes: DurationMinutes;
+  prompts: string[];
   onExit: () => void;
   onFinish: () => void;
 }) {
-  const prompts = meditation.prompts;
-  const cycleMs = useMemo(
-    () => Math.round((minutes * 60 * 1000) / prompts.length),
-    [minutes, prompts.length],
-  );
+  const cycleMs = PROMPT_INTERVAL_MS;
 
   const [index, setIndex] = useState(0);
   const [nudge, setNudge] = useState(0);
@@ -206,19 +241,13 @@ function Player({
   );
 }
 
-function Done({
-  meditation,
-  onHome,
-}: {
-  meditation: Meditation;
-  onHome: () => void;
-}) {
+function Done({ title, onHome }: { title: string; onHome: () => void }) {
   return (
     <div className="player">
       <div className="done">
         <div>
           <h2>That's it.</h2>
-          <p>{meditation.name.toLowerCase()} — complete.</p>
+          <p>{title} — complete.</p>
           <button onClick={onHome}>return</button>
         </div>
       </div>
